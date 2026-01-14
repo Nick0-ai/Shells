@@ -14,11 +14,8 @@ window.onerror = (msg, url, line, col, error) => {
 const root = document.getElementById('root')
 if (root) {
   console.log('Root element found, mounting React...')
-  ReactDOM.createRoot(root).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
-  )
+  // No StrictMode - it causes double mount/unmount which breaks WebSocket connections
+  ReactDOM.createRoot(root).render(<App />)
   console.log('React mounted!')
 } else {
   console.error('Root element not found!')

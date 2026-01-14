@@ -16,6 +16,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [micStream, setMicStream] = useState<MediaStream | null>(null)
+  const micStreamRef = useRef<MediaStream | null>(null)
 
   // Service refs
   const micDeepgramRef = useRef<DeepgramService | null>(null)
@@ -112,6 +113,7 @@ function App() {
         video: false
       })
       setMicStream(stream)
+      micStreamRef.current = stream
       console.log('Microphone granted!')
 
       // Setup audio processing
@@ -164,15 +166,16 @@ function App() {
     setAppState('setup')
   }, [micStream])
 
-  // Cleanup
+  // Cleanup only on unmount
   useEffect(() => {
     return () => {
+      console.log('App unmounting, cleaning up...')
       micDeepgramRef.current?.disconnect()
       processorRef.current?.disconnect()
       audioContextRef.current?.close()
-      micStream?.getTracks().forEach(t => t.stop())
+      micStreamRef.current?.getTracks().forEach(t => t.stop())
     }
-  }, [micStream])
+  }, []) // Empty deps = only on unmount
 
   if (appState === 'loading') {
     return (
