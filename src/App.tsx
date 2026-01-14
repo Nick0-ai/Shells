@@ -7,7 +7,7 @@ import { TranslationService } from './services/translation'
 import { AudioCaptureService } from './services/audioCapture'
 import { Caption, SessionConfig, getLanguageByCode } from './types'
 
-type AppState = 'setup' | 'selecting-source' | 'active'
+type AppState = 'setup' | 'loading' | 'active'
 
 function App() {
   const [appState, setAppState] = useState<AppState>('setup')
@@ -15,6 +15,8 @@ function App() {
   const [yourCaptions, setYourCaptions] = useState<Caption[]>([])
   const [theirCaptions, setTheirCaptions] = useState<Caption[]>([])
   const [isConnected, setIsConnected] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [systemAudioEnabled, setSystemAudioEnabled] = useState(false)
 
   // Service refs
   const micDeepgramRef = useRef<DeepgramService | null>(null)
@@ -22,23 +24,28 @@ function App() {
   const translationRef = useRef<TranslationService | null>(null)
   const micCaptureRef = useRef<AudioCaptureService | null>(null)
   const systemCaptureRef = useRef<AudioCaptureService | null>(null)
+  const configRef = useRef<SessionConfig | null>(null)
 
-  // Interim caption refs (for updating non-final captions)
-  const yourInterimRef = useRef<string | null>(null)
-  const theirInterimRef = useRef<string | null>(null)
+  // Keep config in ref for callbacks
+  useEffect(() => {
+    configRef.current = config
+  }, [config])
 
   // Translate and add caption
   const addCaption = useCallback(
-    async (caption: Partial<Caption>, targetLang: string) => {
+    async (caption: Partial<Caption>) => {
       if (!caption.text || !caption.speaker) return
 
+      const currentConfig = configRef.current
+      if (!currentConfig) return
+
       const sourceLang = caption.speaker === 'you'
-        ? getLanguageByCode(config?.yourLanguage || 'fr')?.deeplCode || 'FR'
-        : getLanguageByCode(config?.theirLanguage || 'en')?.deeplCode || 'EN'
+        ? getLanguageByCode(currentConfig.yourLanguage)?.deeplCode || 'FR'
+        : getLanguageByCode(currentConfig.theirLanguage)?.deeplCode || 'EN'
 
       const targetLangCode = caption.speaker === 'you'
-        ? getLanguageByCode(config?.theirLanguage || 'en')?.deeplCode || 'EN'
-        : getLanguageByCode(config?.yourLanguage || 'fr')?.deeplCode || 'FR'
+        ? getLanguageByCode(currentConfig.theirLanguage)?.deeplCode || 'EN'
+        : getLanguageByCode(currentConfig.yourLanguage)?.deeplCode || 'FR'
 
       let translatedText = caption.text
 
@@ -66,42 +73,74 @@ function App() {
 
       // Update the appropriate caption list
       if (caption.speaker === 'you') {
-        if (caption.isFinal) {
-          yourInterimRef.current = null
-          setYourCaptions((prev) => [...prev.filter(c => c.isFinal), newCaption])
-        } else {
-          yourInterimRef.current = caption.text
-          setYourCaptions((prev) => {
+        setYourCaptions((prev) => {
+          if (caption.isFinal) {
+            return [...prev.filter(c => c.isFinal), newCaption]
+          } else {
             const finals = prev.filter(c => c.isFinal)
             return [...finals, { ...newCaption, translatedText: `[...] ${caption.text}` }]
-          })
-        }
+          }
+        })
       } else {
-        if (caption.isFinal) {
-          theirInterimRef.current = null
-          setTheirCaptions((prev) => [...prev.filter(c => c.isFinal), newCaption])
-        } else {
-          theirInterimRef.current = caption.text
-          setTheirCaptions((prev) => {
+        setTheirCaptions((prev) => {
+          if (caption.isFinal) {
+            return [...prev.filter(c => c.isFinal), newCaption]
+          } else {
             const finals = prev.filter(c => c.isFinal)
             return [...finals, { ...newCaption, translatedText: `[...] ${caption.text}` }]
-          })
-        }
+          }
+        })
       }
     },
-    [config]
+    []
   )
+
+  // Enable system audio capture
+  const enableSystemAudio = useCallback(async () => {
+    if (!config || systemAudioEnabled) return
+
+    const theirLang = getLanguageByCode(config.theirLanguage)
+    if (!theirLang) return
+
+    try {
+      // Initialize Deepgram for system audio if not already
+      if (!systemDeepgramRef.current) {
+        systemDeepgramRef.current = new DeepgramService(
+          config.deepgramApiKey,
+          theirLang.deepgramCode,
+          'them',
+          addCaption
+        )
+        await systemDeepgramRef.current.connect()
+      }
+
+      // Initialize and start system audio capture
+      systemCaptureRef.current = new AudioCaptureService((data) => {
+        systemDeepgramRef.current?.sendAudio(data)
+      })
+
+      await systemCaptureRef.current.startDisplayCapture()
+      setSystemAudioEnabled(true)
+    } catch (error) {
+      console.error('Failed to enable system audio:', error)
+      alert('Could not capture system audio. Make sure to select a window/tab with audio.')
+    }
+  }, [config, systemAudioEnabled, addCaption])
 
   // Start session
   const handleStart = useCallback(async (sessionConfig: SessionConfig) => {
+    console.log('Starting session...', sessionConfig)
     setConfig(sessionConfig)
+    setAppState('loading')
+    setError(null)
 
     // Get language codes
     const yourLang = getLanguageByCode(sessionConfig.yourLanguage)
     const theirLang = getLanguageByCode(sessionConfig.theirLanguage)
 
     if (!yourLang || !theirLang) {
-      alert('Invalid language selection')
+      setError('Invalid language selection')
+      setAppState('setup')
       return
     }
 
@@ -110,61 +149,42 @@ function App() {
       translationRef.current = new TranslationService(sessionConfig.deeplApiKey)
     }
 
-    // Initialize Deepgram for microphone (your voice)
-    micDeepgramRef.current = new DeepgramService(
-      sessionConfig.deepgramApiKey,
-      yourLang.deepgramCode,
-      'you',
-      (caption) => addCaption(caption, theirLang.deeplCode)
-    )
-
-    // Initialize Deepgram for system audio (their voice)
-    systemDeepgramRef.current = new DeepgramService(
-      sessionConfig.deepgramApiKey,
-      theirLang.deepgramCode,
-      'them',
-      (caption) => addCaption(caption, yourLang.deeplCode)
-    )
-
     try {
-      // Connect to Deepgram
-      await Promise.all([
-        micDeepgramRef.current.connect(),
-        systemDeepgramRef.current.connect(),
-      ])
+      // Initialize Deepgram for microphone (your voice)
+      console.log('Connecting to Deepgram...')
+      micDeepgramRef.current = new DeepgramService(
+        sessionConfig.deepgramApiKey,
+        yourLang.deepgramCode,
+        'you',
+        addCaption
+      )
+
+      await micDeepgramRef.current.connect()
+      console.log('Deepgram connected!')
 
       // Initialize audio capture for microphone
+      console.log('Starting microphone capture...')
       micCaptureRef.current = new AudioCaptureService((data) => {
         micDeepgramRef.current?.sendAudio(data)
       })
 
-      // Initialize audio capture for system audio
-      systemCaptureRef.current = new AudioCaptureService((data) => {
-        systemDeepgramRef.current?.sendAudio(data)
-      })
-
-      // Start microphone capture
       await micCaptureRef.current.startMicrophoneCapture()
-
-      // Start system audio capture (user needs to share screen/tab)
-      try {
-        await systemCaptureRef.current.startDisplayCapture()
-      } catch (error) {
-        console.log('System audio not available, continuing with mic only')
-        // We can still work with just the microphone
-      }
+      console.log('Microphone capture started!')
 
       setIsConnected(true)
       setAppState('active')
     } catch (error) {
       console.error('Failed to start session:', error)
-      alert(`Failed to start session: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      setError(error instanceof Error ? error.message : 'Failed to start session')
       handleStop()
+      setAppState('setup')
     }
   }, [addCaption])
 
   // Stop session
   const handleStop = useCallback(() => {
+    console.log('Stopping session...')
+
     // Disconnect Deepgram
     micDeepgramRef.current?.disconnect()
     systemDeepgramRef.current?.disconnect()
@@ -182,6 +202,7 @@ function App() {
 
     // Reset state
     setIsConnected(false)
+    setSystemAudioEnabled(false)
     setYourCaptions([])
     setTheirCaptions([])
     setAppState('setup')
@@ -190,15 +211,51 @@ function App() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      handleStop()
+      micDeepgramRef.current?.disconnect()
+      systemDeepgramRef.current?.disconnect()
+      micCaptureRef.current?.stop()
+      systemCaptureRef.current?.stop()
     }
-  }, [handleStop])
+  }, [])
 
-  // Render based on state
-  if (appState === 'setup') {
-    return <SetupScreen onStart={handleStart} />
+  // Loading screen
+  if (appState === 'loading') {
+    return (
+      <div className="setup-screen">
+        <h1 className="setup-title">Shells</h1>
+        <p className="setup-subtitle">Connecting...</p>
+        <div style={{ marginTop: '20px', color: '#666' }}>
+          Please allow microphone access if prompted
+        </div>
+      </div>
+    )
   }
 
+  // Setup screen
+  if (appState === 'setup') {
+    return (
+      <>
+        <SetupScreen onStart={handleStart} />
+        {error && (
+          <div style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#ef4444',
+            color: 'white',
+            padding: '12px 24px',
+            borderRadius: '8px',
+            zIndex: 1000
+          }}>
+            {error}
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // Active session
   return (
     <div className="app">
       <SessionHeader
@@ -214,7 +271,7 @@ function App() {
           speaker="them"
           language={config?.theirLanguage || 'en'}
           captions={theirCaptions}
-          isLive={isConnected}
+          isLive={isConnected && systemAudioEnabled}
         />
         <CaptionColumn
           title="You said"
@@ -224,6 +281,32 @@ function App() {
           isLive={isConnected}
         />
       </div>
+
+      {!systemAudioEnabled && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#1a1a25',
+          border: '1px solid #2a2a3a',
+          padding: '12px 24px',
+          borderRadius: '8px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px'
+        }}>
+          <span style={{ color: '#a0a0b0' }}>
+            To capture their voice, share your Zoom/Meet tab:
+          </span>
+          <button
+            className="btn btn-primary"
+            onClick={enableSystemAudio}
+          >
+            Share System Audio
+          </button>
+        </div>
+      )}
     </div>
   )
 }
