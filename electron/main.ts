@@ -4,30 +4,51 @@ import { join } from 'path'
 let mainWindow: BrowserWindow | null = null
 
 function createWindow() {
+  console.log('[Main] Creating window...')
+
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 900,
+    height: 700,
     minWidth: 600,
     minHeight: 400,
-    frame: true,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 15 },
     backgroundColor: '#0a0a0f',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false, // Allow loading local files in dev
     },
   })
 
-  // In dev, load from Vite server
-  if (process.env.NODE_ENV === 'development' || process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173')
-    mainWindow.webContents.openDevTools()
+  // Debug: log renderer events
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[Main] Page loaded successfully')
+  })
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('[Main] Page failed to load:', errorCode, errorDescription)
+  })
+
+  mainWindow.webContents.on('crashed', () => {
+    console.error('[Main] Renderer crashed!')
+  })
+
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('[Main] Render process gone:', details.reason)
+  })
+
+  // Load the app
+  const url = process.env.VITE_DEV_SERVER_URL
+  console.log('[Main] Loading URL:', url || 'dist/index.html')
+
+  if (url) {
+    mainWindow.loadURL(url)
   } else {
-    // In production, load built files
     mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
+
+  // Always open devtools for debugging
+  mainWindow.webContents.openDevTools()
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -62,7 +83,7 @@ ipcMain.handle('check-microphone-permission', async () => {
     }
     return true
   }
-  return true // On other platforms, assume granted
+  return true
 })
 
 // Check screen capture permission (macOS)
@@ -75,6 +96,7 @@ ipcMain.handle('check-screen-permission', async () => {
 })
 
 app.whenReady().then(() => {
+  console.log('[Main] App ready, creating window...')
   createWindow()
 
   app.on('activate', () => {
@@ -88,4 +110,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// Log any unhandled errors
+process.on('uncaughtException', (error) => {
+  console.error('[Main] Uncaught exception:', error)
 })
