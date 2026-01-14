@@ -54,12 +54,14 @@ export class DeepgramService {
         this.socket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data)
+            console.log(`[Deepgram ${this.speaker}] Message:`, data.type, data)
 
             if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
               const alternative = data.channel.alternatives[0]
               const transcript = alternative.transcript
 
               if (transcript && transcript.trim()) {
+                console.log(`[Deepgram ${this.speaker}] Transcript:`, transcript, 'isFinal:', data.is_final)
                 this.onTranscript({
                   id: `${this.speaker}-${Date.now()}`,
                   text: transcript,
@@ -98,9 +100,17 @@ export class DeepgramService {
     })
   }
 
+  private audioPacketCount = 0
+
   sendAudio(audioData: ArrayBuffer): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(audioData)
+      this.audioPacketCount++
+      if (this.audioPacketCount % 50 === 0) {
+        console.log(`[Deepgram ${this.speaker}] Sent ${this.audioPacketCount} audio packets`)
+      }
+    } else {
+      console.warn(`[Deepgram ${this.speaker}] Socket not open, state:`, this.socket?.readyState)
     }
   }
 
