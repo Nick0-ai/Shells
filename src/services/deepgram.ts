@@ -11,17 +11,20 @@ export class DeepgramService {
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
   private isConnecting = false
+  private sampleRate: number
 
   constructor(
     apiKey: string,
     language: string,
     speaker: 'them' | 'you',
-    onTranscript: TranscriptCallback
+    onTranscript: TranscriptCallback,
+    sampleRate: number = 48000
   ) {
     this.apiKey = apiKey
     this.language = language
     this.speaker = speaker
     this.onTranscript = onTranscript
+    this.sampleRate = sampleRate
   }
 
   async connect(): Promise<void> {
@@ -40,8 +43,11 @@ export class DeepgramService {
         url.searchParams.set('punctuate', 'true')
         url.searchParams.set('interim_results', 'true')
         url.searchParams.set('endpointing', '300')
-        url.searchParams.set('vad_events', 'true')
+        url.searchParams.set('encoding', 'linear16')
+        url.searchParams.set('sample_rate', this.sampleRate.toString())
+        url.searchParams.set('channels', '1')
 
+        console.log(`[Deepgram ${this.speaker}] Connecting with sample rate: ${this.sampleRate}`)
         this.socket = new WebSocket(url.toString(), ['token', this.apiKey])
 
         this.socket.onopen = () => {

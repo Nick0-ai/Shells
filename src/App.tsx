@@ -95,18 +95,7 @@ function App() {
     }
 
     try {
-      // Connect to Deepgram
-      console.log('Connecting to Deepgram...')
-      micDeepgramRef.current = new DeepgramService(
-        sessionConfig.deepgramApiKey,
-        yourLang.deepgramCode,
-        'you',
-        addCaption
-      )
-      await micDeepgramRef.current.connect()
-      console.log('Deepgram connected!')
-
-      // Get microphone
+      // Get microphone FIRST to know the sample rate
       console.log('Requesting microphone...')
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
@@ -116,10 +105,25 @@ function App() {
       micStreamRef.current = stream
       console.log('Microphone granted!')
 
-      // Setup audio processing
-      const audioContext = new AudioContext({ sampleRate: 16000 })
+      // Setup audio context - use native sample rate
+      const audioContext = new AudioContext()
       audioContextRef.current = audioContext
+      const sampleRate = audioContext.sampleRate
+      console.log('Audio sample rate:', sampleRate)
 
+      // NOW connect to Deepgram with correct sample rate
+      console.log('Connecting to Deepgram...')
+      micDeepgramRef.current = new DeepgramService(
+        sessionConfig.deepgramApiKey,
+        yourLang.deepgramCode,
+        'you',
+        addCaption,
+        sampleRate
+      )
+      await micDeepgramRef.current.connect()
+      console.log('Deepgram connected!')
+
+      // Setup audio processing
       const source = audioContext.createMediaStreamSource(stream)
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       processorRef.current = processor
